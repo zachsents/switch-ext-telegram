@@ -1,12 +1,15 @@
 // Telegram's channel plugin as a spur: this stands in front of it on stdio. It says what the spur
 // needs (a Telegram bot, kind "key") in its handshake, takes the bot's token from the user's
 // connections (handing in, once, one a `.env` still keeps), and only then starts the plugin with
-// it, replaying the handshake to it. Everything else passes through as it is.
+// it, replaying the handshake to it. Everything else passes through as it is. Until the bot is
+// connected it serves no tools, and once it is, it ends so its host starts it again with the token.
 //   bun start.ts <plugin folder>   (run.sh fetches the plugin and runs this)
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 const CONNECTIONS = "ax.switch/connections"
+const REACHES = "ax.switch/reaches"
+const ADDED = "connection.added"
 const NEED = { provider: "telegram", kind: "key", label: "Telegram", scopes: [], multiple: false }
 
 type Json = Record<string, unknown>
@@ -61,13 +64,14 @@ const adoptKept = async () => {
   )
 }
 
+/** The bot's token, or "" while no bot is connected. */
 const tokenOf = async () => {
   await adoptKept()
   const list = await ask("connections/list", { provider: NEED.provider })
   const accounts = Array.isArray(list.accounts) ? list.accounts.filter(isJson) : []
   const account = str(accounts[0]?.account)
   if (account === "") {
-    throw new Error("Telegram isn't connected")
+    return ""
   }
   return str((await ask("connections/token", { provider: NEED.provider, account })).token)
 }
@@ -76,9 +80,76 @@ const tokenOf = async () => {
 let initialize: Json | null = null
 const held: string[] = []
 let child: ReturnType<typeof Bun.spawn<"pipe", "pipe", "inherit">> | null = null
+// No bot connected: it answers for itself, with no tools.
+let unconnected = false
+
+const handshake = (m: Json) => {
+  const params = isJson(m.params) ? m.params : {}
+  send({
+    jsonrpc: "2.0",
+    id: m.id,
+    result: {
+      protocolVersion: str(params.protocolVersion) || "2025-06-18",
+      serverInfo: { name: "telegram", version: "1" },
+      capabilities: {
+        tools: {},
+        experimental: { "claude/channel": {} },
+        extensions: {
+          [CONNECTIONS]: { needs: [NEED] },
+          [REACHES]: { follows: [ADDED] },
+        },
+      },
+    },
+  })
+}
+
+const failed = (error: unknown) => {
+  process.stderr.write(`telegram: ${error instanceof Error ? error.message : String(error)}\n`)
+  process.exit(1)
+}
+
+// Each client that shakes hands is asked for word of the bot's connecting.
+const follow = () => {
+  void ask("switch/follow", { types: [ADDED] }).catch(failed)
+}
+
+const asUnconnected = (m: Json) => {
+  if (m.method === "switch/event") {
+    const params = isJson(m.params) ? m.params : {}
+    const payload = isJson(params.payload) ? params.payload : {}
+    if (params.type === ADDED && payload.provider === NEED.provider) {
+      process.exit(0)
+    }
+    return
+  }
+  if (m.id === undefined || typeof m.method !== "string") {
+    return
+  }
+  if (m.method === "initialize") {
+    handshake(m)
+    follow()
+  } else if (m.method === "tools/list") {
+    send({ jsonrpc: "2.0", id: m.id, result: { tools: [] } })
+  } else if (m.method === "ping") {
+    send({ jsonrpc: "2.0", id: m.id, result: {} })
+  } else {
+    send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "Telegram isn't connected" } })
+  }
+}
 
 const start = async () => {
   const token = await tokenOf()
+  if (token === "") {
+    unconnected = true
+    for (const line of held.splice(0)) {
+      const m: unknown = JSON.parse(line)
+      if (isJson(m)) {
+        asUnconnected(m)
+      }
+    }
+    follow()
+    return
+  }
   const proc = Bun.spawn(["bun", "--preload", "./readonly.ts", "server.ts"], {
     cwd: plugin,
     env: { ...process.env, TELEGRAM_BOT_TOKEN: token },
@@ -121,26 +192,14 @@ const received = (line: string) => {
     waiting.delete(m.id)
     return
   }
+  if (unconnected) {
+    asUnconnected(m)
+    return
+  }
   if (m.method === "initialize" && initialize === null) {
     initialize = m
-    const params = isJson(m.params) ? m.params : {}
-    send({
-      jsonrpc: "2.0",
-      id: m.id,
-      result: {
-        protocolVersion: str(params.protocolVersion) || "2025-06-18",
-        serverInfo: { name: "telegram", version: "1" },
-        capabilities: {
-          tools: {},
-          experimental: { "claude/channel": {} },
-          extensions: { [CONNECTIONS]: { needs: [NEED] } },
-        },
-      },
-    })
-    void start().catch((error: unknown) => {
-      process.stderr.write(`telegram: ${error instanceof Error ? error.message : String(error)}\n`)
-      process.exit(1)
-    })
+    handshake(m)
+    void start().catch(failed)
     return
   }
   if (m.method === "notifications/initialized" && child === null) {
