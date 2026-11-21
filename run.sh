@@ -1,6 +1,7 @@
 #!/bin/sh
-# Anthropic's Telegram channel plugin, as it ships at a pinned commit, fetched once into the spur's
-# home and run behind start.ts (its token from Switch's connections) with readonly.ts preloaded.
+# Anthropic's Telegram channel plugin, as it ships at a pinned commit, fetched once into the
+# extension's home and run behind start.ts (its token from Switch's connections) with readonly.ts
+# preloaded.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 home=${SB_HOME:-$here/home}

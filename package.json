@@ -1,11 +1,11 @@
 {
-  "name": "spur-telegram",
+  "name": "switch-ext-telegram",
   "version": "0.1.0",
   "private": true,
-  "description": "A Telegram bot of the user's own as a Switch spur: Anthropic's Telegram channel plugin, as it ships.",
+  "description": "A Telegram bot of the user's own as a Switch extension: Anthropic's Telegram channel plugin, as it ships.",
   "license": "MIT",
-  "repository": "github:zachsents/spur-telegram",
-  "spur": {
+  "repository": "github:zachsents/switch-ext-telegram",
+  "extension": {
     "name": "telegram",
     "command": [
       "sh",

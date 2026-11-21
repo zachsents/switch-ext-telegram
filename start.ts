@@ -1,7 +1,7 @@
-// Telegram's channel plugin as a spur: this stands in front of it on stdio. It says what the spur
-// needs (a Telegram bot, kind "key") in its handshake, takes the bot's token from the user's
-// connections (handing in, once, one a `.env` still keeps), and only then starts the plugin with
-// it, replaying the handshake to it. Everything else passes through as it is. Until the bot is
+// Telegram's channel plugin as an extension: this stands in front of it on stdio. It says what the
+// extension needs (a Telegram bot, kind "key") in its handshake, takes the bot's token from the
+// user's connections (handing in, once, one a `.env` still keeps), and only then starts the plugin
+// with it, replaying the handshake to it. Everything else passes through as it is. Until the bot is
 // connected it serves no tools, and once it is, it ends so its host starts it again with the token.
 //   bun start.ts <plugin folder>   (run.sh fetches the plugin and runs this)
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
