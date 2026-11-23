@@ -1,7 +1,7 @@
 #!/bin/sh
 # Anthropic's Telegram channel plugin, as it ships at a pinned commit, fetched once into the
 # extension's home and run behind start.ts (its token from Switch's connections) with readonly.ts
-# preloaded.
+# and pulse.ts preloaded.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 home=${SB_HOME:-$here/home}
@@ -19,7 +19,7 @@ if [ "$(cat "$plugin/.pin" 2>/dev/null)" != "$pin" ]; then
   rm -rf "$tmp"
   echo "$pin" > "$plugin/.pin"
 fi
-cp "$here/readonly.ts" "$plugin/"
+cp "$here/readonly.ts" "$here/pulse.ts" "$plugin/"
 mkdir -p "$home/state"
 export TELEGRAM_STATE_DIR="$home/state"
 cd "$plugin"

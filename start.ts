@@ -3,6 +3,8 @@
 // user's connections (handing in, once, one a `.env` still keeps), and only then starts the plugin
 // with it, replaying the handshake to it. Everything else passes through as it is. Until the bot is
 // connected it serves no tools, and once it is, it ends so its host starts it again with the token.
+// Its `heartbeat` event (vitals/telegram) says what is failing now, from the plugin's polling loop
+// (pulse.ts): every five minutes while that loop runs, and at once when what's failing changes.
 //   bun start.ts <plugin folder>   (run.sh fetches the plugin and runs this)
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
@@ -10,6 +12,10 @@ import path from "node:path"
 const CONNECTIONS = "ax.switch/connections"
 const REACHES = "ax.switch/reaches"
 const ADDED = "connection.added"
+const RECORD = "switchboard/record"
+const SUBSCRIPTION = "io.modelcontextprotocol/subscriptionId"
+const PULSE = "telegram/pulse"
+const BEAT_MS = 5 * 60_000
 const NEED = { provider: "telegram", kind: "key", label: "Telegram", scopes: [], multiple: false }
 
 type Json = Record<string, unknown>
@@ -22,6 +28,133 @@ const envFile = path.join(home, ".env")
 
 const send = (m: Json) => {
   process.stdout.write(`${JSON.stringify(m)}\n`)
+}
+
+// The heartbeat: how the sense is, said by the loop that senses.
+const HEARTBEAT = {
+  name: "heartbeat",
+  description: "How it is itself",
+  delivery: ["push", "poll"],
+  inputSchema: { type: "object", properties: {} },
+  payloadSchema: { type: "object" },
+  _meta: { [RECORD]: { stream: "vitals/telegram", kind: "observation", retention: "signal" } },
+}
+const streams: unknown[] = []
+let unsent: Json | null = null
+let beatAt = 0
+let said: string | null | undefined
+let pulse: { poll: string | null; skipped: Record<string, string> } = { poll: null, skipped: {} }
+
+/** Who may write to the bot, as the plugin's access.json has it: nothing gets in without someone. */
+const access = () => {
+  const file = path.join(home, "access.json")
+  if (!existsSync(file)) {
+    return { trouble: "access: no one is paired, so every message is dropped", allowed: 0, pending: 0 }
+  }
+  try {
+    const a: unknown = JSON.parse(readFileSync(file, "utf-8"))
+    const kept = isJson(a) ? a : {}
+    const allowed = Array.isArray(kept.allowFrom) ? kept.allowFrom.length : 0
+    const groups = isJson(kept.groups) ? Object.keys(kept.groups).length : 0
+    const pending = isJson(kept.pending) ? Object.keys(kept.pending).length : 0
+    const trouble =
+      kept.dmPolicy === "disabled"
+        ? "access: messages are off (dmPolicy disabled)"
+        : allowed + groups === 0
+          ? "access: no one is paired, so every message is dropped"
+          : null
+    return { trouble, allowed, pending }
+  } catch {
+    return { trouble: "access: access.json is unreadable", allowed: 0, pending: 0 }
+  }
+}
+
+const beat = (connected: boolean) => {
+  const skipped = Object.entries(pulse.skipped)
+  const latest = skipped.at(-1)
+  const seen = access()
+  const parts = connected
+    ? [
+        ...(pulse.poll === null ? [] : [`polling: ${pulse.poll}`]),
+        ...(latest === undefined
+          ? []
+          : [
+              `skipped ${String(skipped.length)} update${skipped.length === 1 ? "" : "s"} it couldn't take in (latest ${latest[0]}: ${latest[1]})`,
+            ]),
+        ...(seen.trouble === null ? [] : [seen.trouble]),
+      ]
+    : ["Telegram isn't connected"]
+  const failing = parts.length === 0 ? null : parts.join("; ")
+  if (Date.now() - beatAt < BEAT_MS && failing === said) {
+    return
+  }
+  said = failing
+  beatAt = Date.now()
+  const occurrence: Json = {
+    eventId: crypto.randomUUID(),
+    name: HEARTBEAT.name,
+    timestamp: new Date().toISOString(),
+    data: {
+      entity: "sense:telegram",
+      summary: (failing === null ? "Polling" : `Failing: ${failing}`).slice(0, 600),
+      facts: {
+        failing,
+        polling: connected && pulse.poll === null,
+        skipped: pulse.skipped,
+        allowed: seen.allowed,
+        pending: seen.pending,
+      },
+    },
+    cursor: null,
+  }
+  if (streams.length === 0) {
+    unsent = occurrence
+    return
+  }
+  for (const id of streams) {
+    send({
+      jsonrpc: "2.0",
+      method: "notifications/events/event",
+      params: { ...occurrence, _meta: { [SUBSCRIPTION]: id } },
+    })
+  }
+}
+
+/** Its own events, answered here whatever runs behind it; true when it was one. */
+const ownEvents = (m: Json) => {
+  if (m.method === "events/list") {
+    send({ jsonrpc: "2.0", id: m.id, result: { events: [HEARTBEAT] } })
+    return true
+  }
+  const params = isJson(m.params) ? m.params : {}
+  if (m.method === "events/poll") {
+    send({ jsonrpc: "2.0", id: m.id, result: { events: [], cursor: null, truncated: false, hasMore: false } })
+    return true
+  }
+  if (m.method !== "events/stream") {
+    return false
+  }
+  if (params.name !== HEARTBEAT.name) {
+    send({ jsonrpc: "2.0", id: m.id, error: { code: -32023, message: "NotFound", data: { kind: "event" } } })
+    return true
+  }
+  // Open until the client cancels it.
+  streams.push(m.id)
+  send({
+    jsonrpc: "2.0",
+    method: "notifications/events/active",
+    params: { cursor: null, truncated: false, heartbeatMs: BEAT_MS, _meta: { [SUBSCRIPTION]: m.id } },
+  })
+  if (unsent !== null) {
+    const held = unsent
+    unsent = null
+    send({
+      jsonrpc: "2.0",
+      method: "notifications/events/event",
+      params: { ...held, _meta: { [SUBSCRIPTION]: m.id } },
+    })
+  }
+  return true
 }
 
 // Requests of its own to the client, answered on stdin.
@@ -141,6 +274,11 @@ const start = async () => {
   const token = await tokenOf()
   if (token === "") {
     unconnected = true
+    // No loop runs until a bot is connected: it says so on its own beat.
+    beat(false)
+    setInterval(() => {
+      beat(false)
+    }, BEAT_MS)
     for (const line of held.splice(0)) {
       const m: unknown = JSON.parse(line)
       if (isJson(m)) {
@@ -150,7 +288,7 @@ const start = async () => {
     follow()
     return
   }
-  const proc = Bun.spawn(["bun", "--preload", "./readonly.ts", "server.ts"], {
+  const proc = Bun.spawn(["bun", "--preload", "./readonly.ts", "--preload", "./pulse.ts", "server.ts"], {
     cwd: plugin,
     env: { ...process.env, TELEGRAM_BOT_TOKEN: token },
     stdin: "pipe",
@@ -174,8 +312,22 @@ const start = async () => {
     const lines = rest.split("\n")
     rest = lines.pop() ?? ""
     for (const line of lines.filter((l) => l.trim() !== "")) {
-      const m: unknown = JSON.parse(line)
-      if (!(isJson(m) && m.id === replayed)) {
+      let m: unknown
+      try {
+        m = JSON.parse(line)
+      } catch {
+        process.stderr.write(`telegram: dropped a line that isn't JSON: ${line.slice(0, 200)}\n`)
+        continue
+      }
+      if (isJson(m) && m.method === PULSE) {
+        const p = isJson(m.params) ? m.params : {}
+        const skipped = isJson(p.skipped) ? p.skipped : {}
+        pulse = {
+          poll: typeof p.poll === "string" ? p.poll : null,
+          skipped: Object.fromEntries(Object.entries(skipped).map(([k, v]) => [k, str(v)])),
+        }
+        beat(true)
+      } else if (!(isJson(m) && m.id === replayed)) {
         process.stdout.write(`${line}\n`)
       }
     }
@@ -190,6 +342,17 @@ const received = (line: string) => {
   if (m.method === undefined && typeof m.id === "string" && waiting.has(m.id)) {
     waiting.get(m.id)?.(m)
     waiting.delete(m.id)
+    return
+  }
+  if (m.method === "notifications/cancelled") {
+    const params = isJson(m.params) ? m.params : {}
+    const at = streams.indexOf(params.requestId)
+    if (at !== -1) {
+      streams.splice(at, 1)
+      return
+    }
+  }
+  if (ownEvents(m)) {
     return
   }
   if (unconnected) {
