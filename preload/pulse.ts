@@ -1,7 +1,7 @@
-// The plugin's polling loop, as start.ts hears it: loaded before the plugin (`bun --preload`), this
-// says on stdout, as a `telegram/pulse` line start.ts takes out, how each of the loop's calls to
-// Telegram went, and which updates it couldn't take in. An update whose handling fails is kept
-// (in the state folder's skipped.json) and tried again after each poll until it goes through.
+// The plugin's polling loop, as the extension hears it: loaded before the plugin (`bun --preload`),
+// this says on stdout, as a `telegram/pulse` line the extension takes out, how each of the loop's
+// calls to Telegram went, and which updates it couldn't take in. An update whose handling fails is
+// kept (in the state folder's skipped.json) and tried again after each poll until it goes through.
 import { readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { Api, Bot } from "grammy"
@@ -37,7 +37,8 @@ const save = () => {
   }
 }
 
-const said = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300)
+const said = (error: unknown) =>
+  (error instanceof Error ? error.message : String(error)).slice(0, 300)
 
 const pulse = () => {
   const why = Object.fromEntries(Object.entries(skipped).map(([id, s]) => [id, s.why]))

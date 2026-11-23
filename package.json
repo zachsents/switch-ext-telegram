@@ -5,13 +5,32 @@
   "description": "A Telegram bot of the user's own as a Switch extension: Anthropic's Telegram channel plugin, as it ships.",
   "license": "MIT",
   "repository": "github:zachsents/switch-ext-telegram",
+  "type": "module",
+  "scripts": {
+    "start": "bun src/main.ts",
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint --type-aware --fix --fix-suggestions",
+    "format": "oxfmt --write .",
+    "fix": "bun run lint && bun run format",
+    "captions": "ui-captions src",
+    "check": "bun run typecheck && bun run captions && bun run fix"
+  },
+  "dependencies": {
+    "effect": "^4.1.5",
+    "switch-ext-kit": "github:zachsents/switch-ext-kit#16aa6f1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.5",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "grammy": "^1.21.0",
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0",
+    "oxlint-tsgolint": "^7.0.2007",
+    "ultracite": "^8.3.1"
+  },
   "extension": {
     "name": "telegram",
-    "command": [
-      "sh",
-      "./run.sh"
-    ],
-    "shim": "switchboard",
+    "main": "src/main.ts",
     "needs": [
       "always-on"
     ],
