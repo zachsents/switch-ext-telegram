@@ -1,3 +1,5 @@
+**Moved to [zachsents/switch](https://github.com/zachsents/switch/tree/main/extensions/telegram).** This repo is archived.
+
 # switch-ext-telegram
 
 Anthropic's Telegram channel plugin, as it ships.
